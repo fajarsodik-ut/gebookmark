@@ -1,6 +1,6 @@
 # Markit: The Minimalist Bookmarking App
 
-[cloudflarebutton]
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/fajarsodik-ut/gebookmark)
 
 Markit is a modern, minimalist, and user-friendly single-page bookmarking web application. It allows users to effortlessly save, view, and manage their favorite websites. The entire application is built with a focus on simplicity and visual clarity, running entirely in the browser without any backend. All data is persistently stored in the browser's localStorage, ensuring bookmarks are available on subsequent visits. The interface consists of a clean header, an intuitive form for adding new bookmarks, and a dynamic list of saved bookmarks displayed as elegant cards.
 
@@ -86,4 +86,4 @@ This project is configured for seamless deployment to Cloudflare Pages.
 
 Alternatively, you can connect your GitHub repository to Cloudflare Pages for automatic deployments on every push.
 
-[cloudflarebutton]
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/fajarsodik-ut/gebookmark)
