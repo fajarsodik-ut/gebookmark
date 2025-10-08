@@ -4,8 +4,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Toaster, toast } from 'sonner';
-import { v4 as uuidv4 } from 'uuid';
-import { Link, X, Pin, Star, Pencil, Search } from 'lucide-react';
+import { Link, X, Pin, Star, Pencil, Search, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
@@ -14,45 +13,54 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogClose } from '@/components/ui/dialog';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { cn } from '@/lib/utils';
-type Bookmark = {
-  id: string;
-  name: string;
-  url: string;
-  isPinned?: boolean;
-};
+import {
+  type Bookmark,
+  fetchBookmarks,
+  addBookmark as addBookmarkToSupabase,
+  updateBookmark as updateBookmarkInSupabase,
+  deleteBookmark as deleteBookmarkFromSupabase,
+  togglePin as togglePinInSupabase,
+  migrateLocalBookmarks,
+} from '@/lib/bookmarkService';
+
 const bookmarkSchema = z.object({
   name: z.string().min(1, { message: 'Website name cannot be empty.' }),
   url: z.string().url({ message: 'Please enter a valid URL (e.g., https://example.com).' }),
 });
 type BookmarkFormData = z.infer<typeof bookmarkSchema>;
+
 export function HomePage() {
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [editingBookmark, setEditingBookmark] = useState<Bookmark | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  // Load bookmarks from Supabase on mount
   useEffect(() => {
-    try {
-      const savedBookmarks = localStorage.getItem('bookmarks');
-      if (savedBookmarks) {
-        const parsedBookmarks: Bookmark[] = JSON.parse(savedBookmarks);
-        const bookmarksWithPinStatus = parsedBookmarks.map(bm => ({
-          ...bm,
-          isPinned: bm.isPinned ?? false,
-        }));
-        setBookmarks(bookmarksWithPinStatus);
+    async function loadBookmarks() {
+      setIsLoading(true);
+      try {
+        // Check if we need to migrate localStorage bookmarks
+        const localBookmarks = localStorage.getItem('bookmarks');
+        if (localBookmarks) {
+          toast.info('Migrating your local bookmarks to cloud storage...');
+          await migrateLocalBookmarks();
+        }
+
+        // Fetch bookmarks from Supabase
+        const data = await fetchBookmarks();
+        setBookmarks(data);
+      } catch (error) {
+        console.error('Failed to load bookmarks:', error);
+        toast.error('Could not load your bookmarks.');
+      } finally {
+        setIsLoading(false);
       }
-    } catch (error) {
-      console.error("Failed to load bookmarks from localStorage", error);
-      toast.error("Could not load your bookmarks.");
     }
+
+    loadBookmarks();
   }, []);
-  useEffect(() => {
-    try {
-      localStorage.setItem('bookmarks', JSON.stringify(bookmarks));
-    } catch (error) {
-      console.error("Failed to save bookmarks to localStorage", error);
-      toast.error("Could not save your changes.");
-    }
-  }, [bookmarks]);
   const addForm = useForm<BookmarkFormData>({
     resolver: zodResolver(bookmarkSchema),
     defaultValues: { name: '', url: '' },
@@ -60,30 +68,93 @@ export function HomePage() {
   const editForm = useForm<BookmarkFormData>({
     resolver: zodResolver(bookmarkSchema),
   });
-  const onAddSubmit = (data: BookmarkFormData) => {
-    const newBookmark: Bookmark = { id: uuidv4(), isPinned: false, ...data };
-    setBookmarks(prev => [newBookmark, ...prev]);
-    addForm.reset();
-    toast.success('Bookmark added!');
+
+  const onAddSubmit = async (data: BookmarkFormData) => {
+    setIsSyncing(true);
+    try {
+      const newBookmark = await addBookmarkToSupabase(data.name, data.url);
+      if (newBookmark) {
+        setBookmarks(prev => [newBookmark, ...prev]);
+        addForm.reset();
+        toast.success('Bookmark added!');
+      } else {
+        toast.error('Failed to add bookmark.');
+      }
+    } catch (error) {
+      console.error('Error adding bookmark:', error);
+      toast.error('Failed to add bookmark.');
+    } finally {
+      setIsSyncing(false);
+    }
   };
-  const onEditSubmit = (data: BookmarkFormData) => {
+
+  const onEditSubmit = async (data: BookmarkFormData) => {
     if (!editingBookmark) return;
-    setBookmarks(prev =>
-      prev.map(bm => (bm.id === editingBookmark.id ? { ...bm, ...data } : bm))
-    );
-    setEditingBookmark(null);
-    toast.success('Bookmark updated!');
+    
+    setIsSyncing(true);
+    try {
+      const success = await updateBookmarkInSupabase(editingBookmark.id, {
+        name: data.name,
+        url: data.url,
+      });
+
+      if (success) {
+        setBookmarks(prev =>
+          prev.map(bm => (bm.id === editingBookmark.id ? { ...bm, ...data } : bm))
+        );
+        setEditingBookmark(null);
+        toast.success('Bookmark updated!');
+      } else {
+        toast.error('Failed to update bookmark.');
+      }
+    } catch (error) {
+      console.error('Error updating bookmark:', error);
+      toast.error('Failed to update bookmark.');
+    } finally {
+      setIsSyncing(false);
+    }
   };
-  const deleteBookmark = (id: string) => {
-    setBookmarks(prev => prev.filter(bookmark => bookmark.id !== id));
-    toast.info('Bookmark removed.');
+
+  const deleteBookmark = async (id: string) => {
+    setIsSyncing(true);
+    try {
+      const success = await deleteBookmarkFromSupabase(id);
+      if (success) {
+        setBookmarks(prev => prev.filter(bookmark => bookmark.id !== id));
+        toast.info('Bookmark removed.');
+      } else {
+        toast.error('Failed to delete bookmark.');
+      }
+    } catch (error) {
+      console.error('Error deleting bookmark:', error);
+      toast.error('Failed to delete bookmark.');
+    } finally {
+      setIsSyncing(false);
+    }
   };
-  const togglePin = (id: string) => {
-    setBookmarks(prev =>
-      prev.map(bookmark =>
-        bookmark.id === id ? { ...bookmark, isPinned: !bookmark.isPinned } : bookmark
-      )
-    );
+
+  const togglePin = async (id: string) => {
+    const bookmark = bookmarks.find(b => b.id === id);
+    if (!bookmark) return;
+
+    setIsSyncing(true);
+    try {
+      const success = await togglePinInSupabase(id, bookmark.isPinned);
+      if (success) {
+        setBookmarks(prev =>
+          prev.map(bm =>
+            bm.id === id ? { ...bm, isPinned: !bm.isPinned } : bm
+          )
+        );
+      } else {
+        toast.error('Failed to pin bookmark.');
+      }
+    } catch (error) {
+      console.error('Error toggling pin:', error);
+      toast.error('Failed to pin bookmark.');
+    } finally {
+      setIsSyncing(false);
+    }
   };
   const handleOpenEditDialog = (bookmark: Bookmark) => {
     setEditingBookmark(bookmark);
@@ -177,12 +248,19 @@ export function HomePage() {
   return (
     <>
       <ThemeToggle className="fixed top-4 right-4" />
+      {isSyncing && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-slate-900/90 text-white px-4 py-2 rounded-lg shadow-lg flex items-center gap-2">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          <span>Syncing...</span>
+        </div>
+      )}
       <main className="min-h-screen w-full font-sans text-slate-800 antialiased">
         <div className="container mx-auto max-w-3xl px-4 py-16 sm:px-6 md:py-24">
           <div className="flex flex-col space-y-12">
             <header className="text-center">
               <h1 className="text-4xl font-bold tracking-tight text-slate-900 dark:text-white sm:text-5xl">Markit</h1>
               <p className="mt-3 text-lg text-slate-600 dark:text-slate-400">Your simple, minimalist bookmarking app.</p>
+              <p className="mt-1 text-sm text-green-600 dark:text-green-400">☁️ Cloud synced with Supabase</p>
             </header>
             <section>
               <Card className="shadow-md dark:bg-slate-800">
@@ -222,18 +300,32 @@ export function HomePage() {
                   <TabsTrigger value="pinned">Pinned</TabsTrigger>
                 </TabsList>
                 <TabsContent value="all" className="mt-6">
-                  <AnimatePresence>
-                    {sortedBookmarks.length > 0 ? (
-                      <motion.div layout className="grid grid-cols-1 gap-4 sm:grid-cols-2">{sortedBookmarks.map(renderBookmarkCard)}</motion.div>
-                    ) : ( renderEmptyState('all') )}
-                  </AnimatePresence>
+                  {isLoading ? (
+                    <div className="flex justify-center items-center py-12">
+                      <Loader2 className="h-8 w-8 animate-spin text-indigo-600" />
+                      <span className="ml-2 text-slate-600 dark:text-slate-400">Loading bookmarks...</span>
+                    </div>
+                  ) : (
+                    <AnimatePresence>
+                      {sortedBookmarks.length > 0 ? (
+                        <motion.div layout className="grid grid-cols-1 gap-4 sm:grid-cols-2">{sortedBookmarks.map(renderBookmarkCard)}</motion.div>
+                      ) : ( renderEmptyState('all') )}
+                    </AnimatePresence>
+                  )}
                 </TabsContent>
                 <TabsContent value="pinned" className="mt-6">
-                  <AnimatePresence>
-                    {pinnedBookmarks.length > 0 ? (
-                      <motion.div layout className="grid grid-cols-1 gap-4 sm:grid-cols-2">{pinnedBookmarks.map(renderBookmarkCard)}</motion.div>
-                    ) : ( renderEmptyState('pinned') )}
-                  </AnimatePresence>
+                  {isLoading ? (
+                    <div className="flex justify-center items-center py-12">
+                      <Loader2 className="h-8 w-8 animate-spin text-indigo-600" />
+                      <span className="ml-2 text-slate-600 dark:text-slate-400">Loading bookmarks...</span>
+                    </div>
+                  ) : (
+                    <AnimatePresence>
+                      {pinnedBookmarks.length > 0 ? (
+                        <motion.div layout className="grid grid-cols-1 gap-4 sm:grid-cols-2">{pinnedBookmarks.map(renderBookmarkCard)}</motion.div>
+                      ) : ( renderEmptyState('pinned') )}
+                    </AnimatePresence>
+                  )}
                 </TabsContent>
               </Tabs>
             </section>
